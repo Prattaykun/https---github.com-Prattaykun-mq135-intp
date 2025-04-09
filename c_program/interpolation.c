@@ -2,145 +2,183 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define MAX 100  // Maximum data points
-#define EPSILON 1e-6  // Small value to check for near-zero
+#define EPSILON 1e-6
 
-// Linear interpolation - simpler and more stable for this application
-float linear_interpolation(float x[], float y[], int n, float xp) {
-    // Find the two points that bracket xp
-    int i = 0;
-    while (i < n - 1 && x[i + 1] < xp) {
-        i++;
-    }
-
-    if (i == n - 1) {
-        // xp is beyond the last point, use the last point value
-        return y[n - 1];
-    }
-
-    if (i < 0) {
-        // xp is before the first point, use the first point value
-        return y[0];
-    }
-
-    // Perform linear interpolation between x[i] and x[i+1]
-    float t = (xp - x[i]) / (x[i + 1] - x[i]);
-    return y[i] * (1 - t) + y[i + 1] * t;
+// Function to convert HH:MM to minutes
+float convert_to_minutes(int hours, int minutes) {
+    return hours * 60 + minutes;
 }
 
-// Lagrange interpolation (use a local subset of points for better stability)
-float lagrange_interpolation(float x[], float y[], int n, float xp, int max_points) {
-    // Find closest points to use for interpolation
-    int start_idx = 0;
-    float min_dist = fabs(xp - x[0]);
+// Function to convert minutes to HH:MM
+void convert_to_hhmm(float minutes) {
+    int total_minutes = (int)minutes;
+    int hours = (total_minutes / 60) % 24;
+    int mins = total_minutes % 60;
 
+    printf("%02d:%02d", hours, mins);
+}
+
+// Lagrange interpolation using selected nearest points
+float lagrange_interpolation(float *x, float *y, int n, float xp, int max_points) {
+    // Find closest point index
+    int closest = 0;
+    float min_dist = fabs(xp - x[0]);
     for (int i = 1; i < n; i++) {
         float dist = fabs(xp - x[i]);
         if (dist < min_dist) {
             min_dist = dist;
-            start_idx = i;
+            closest = i;
         }
     }
 
-    // Adjust starting index to get points both before and after xp if possible
-    start_idx = start_idx - max_points/2;
-    if (start_idx < 0) start_idx = 0;
-    if (start_idx + max_points > n) start_idx = n - max_points;
-    if (start_idx < 0) start_idx = 0;  // In case n < max_points
+    // Determine starting index for subset
+    int start = closest - max_points / 2;
+    if (start < 0) start = 0;
+    if (start + max_points > n) start = n - max_points;
+    if (start < 0) start = 0;
 
-    // Number of points to use for interpolation
     int points = (n < max_points) ? n : max_points;
-    if (start_idx + points > n) points = n - start_idx;
+    if (start + points > n) points = n - start;
 
-    printf("\nUsing %d points for Lagrange interpolation (starting at index %d)\n", points, start_idx);
+    // printf("\nUsing %d nearest points for Lagrange interpolation (starting at index %d)\n", points, start);
 
-    // Perform Lagrange interpolation with the selected points
     float result = 0.0;
 
     for (int i = 0; i < points; i++) {
-        float term = y[start_idx + i];
-        float numerator = 1.0;
-        float denominator = 1.0;
+        float term = y[start + i];
+        float num = 1.0, den = 1.0;
 
         for (int j = 0; j < points; j++) {
             if (j != i) {
-                numerator *= (xp - x[start_idx + j]);
-                denominator *= (x[start_idx + i] - x[start_idx + j]);
+                num *= (xp - x[start + j]);
+                den *= (x[start + i] - x[start + j]);
             }
         }
 
-        // Check for division by zero
-        if (fabs(denominator) < EPSILON) {
-            printf("Warning: Division by near-zero in Lagrange interpolation\n");
+        if (fabs(den) < EPSILON) {
+            printf("Warning: Division by near-zero\n");
             continue;
         }
 
-        term *= (numerator / denominator);
+        term *= (num / den);
         result += term;
 
-        // Print steps for clarity
-        printf("Point %d (%.2f, %.2f): term = %.4f\n",
-               start_idx + i, x[start_idx + i], y[start_idx + i], term);
+        // printf("Point %d (", start + i);
+        convert_to_hhmm(x[start + i]);
+        // printf(", %.2f): term = %.4f\n", y[start + i], term);
     }
 
     return result;
 }
 
+// Find actual y value closest to given x for error calculation
+float find_nearest_actual(float *x, float *y, int n, float xp) {
+    float min_diff = fabs(xp - x[0]);
+    int idx = 0;
+    for (int i = 1; i < n; i++) {
+        float diff = fabs(xp - x[i]);
+        if (diff < min_diff) {
+            min_diff = diff;
+            idx = i;
+        }
+    }
+    return y[idx];
+}
+
 int main() {
-    FILE *file = fopen("../data_processing/pollution_data.csv", "r");
-    if (file == NULL) {
+    FILE *file = fopen("../data/pollution_data.csv", "r");
+    if (!file) {
         printf("Error: Unable to open file.\n");
         return 1;
     }
 
-    float x[MAX], y[MAX];  // Simplified array structure (don't need difference table)
-    int n = 0;
-
     char header[100];
-    fgets(header, sizeof(header), file); // Read and ignore header
+    fgets(header, sizeof(header), file); // Skip header
 
-    // Read pollution data (Time, CO2)
-    while (fscanf(file, "%f,%*d,%*f,%f", &x[n], &y[n]) == 2) {
-        n++;
-        if (n >= MAX) break;
+    // First pass to count rows
+    int count = 0;
+    float temp1, temp2;
+    while (fscanf(file, "%f,%*d,%*f,%f", &temp1, &temp2) == 2) {
+        count++;
     }
-    fclose(file);
+    rewind(file);
+    fgets(header, sizeof(header), file); // Skip header again
 
-    // Print the data points being used
-    printf("Data points being used for interpolation: %d points\n", n);
-    printf("Time (s)\tCO2 (ppm)\n");
-    for (int i = 0; i < n; i++) {
-        printf("%.2f\t\t%.2f\n", x[i], y[i]);
-    }
-
-    // Check if data was successfully loaded
-    if (n < 2) {
-        printf("Error: Not enough data points for interpolation.\n");
+    // Dynamic memory allocation
+    float *x = (float *)malloc(count * sizeof(float));
+    float *y = (float *)malloc(count * sizeof(float));
+    if (!x || !y) {
+        printf("Memory allocation failed.\n");
         return 1;
     }
 
-    // Get user input for timestamp
-    float xp;
-    printf("\nEnter the timestamp to predict CO2 level: ");
-    scanf("%f", &xp);
+    // Load data
+    int i = 0;
+    while (fscanf(file, "%f,%*d,%*f,%f", &x[i], &y[i]) == 2 && i < count) {
+        i++;
+    }
+    fclose(file);
 
-    // Check if input is within range
-    if (xp < x[0] || xp > x[n-1]) {
-        printf("Warning: Interpolation point %.2f is outside data range (%.2f to %.2f).\n",
-               xp, x[0], x[n-1]);
-        printf("Results may be less reliable due to extrapolation.\n\n");
+    printf("Loaded %d data points.\n", count);
+    printf("Time\t\tCO2 (ppm)\n");
+    for (int j = 0; j < count; j++) {  // Show all data points
+        printf("");
+        convert_to_hhmm(x[j]);
+        printf("\t\t%.2f\n", y[j]);
+    }
+    
+    // Show time range in HH:MM format
+    printf("\nData time range: ");
+    convert_to_hhmm(x[0]);
+    printf(" to ");
+    convert_to_hhmm(x[count-1]);
+    printf("\n");
+    
+    // Input time in HH:MM format
+    int hours, minutes;
+    printf("\nEnter the time in 24-hour format (HH:MM) to predict CO2 level: ");
+    if (scanf("%d:%d", &hours, &minutes) != 2) {
+        printf("Error: Invalid time format. Please use HH:MM format.\n");
+        free(x);
+        free(y);
+        return 1;
+    }
+    
+    // Validate time input
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        printf("Error: Invalid time values. Hours must be 0-23, minutes must be 0-59.\n");
+        free(x);
+        free(y);
+        return 1;
+    }
+    
+    // Convert input time to minutes for interpolation
+    float xp = convert_to_minutes(hours, minutes);
+    
+    printf("Time entered: %02d:%02d (%.0f minutes)\n", hours, minutes, xp);
+
+    if (xp < x[0] || xp > x[count - 1]) {
+        printf("⚠️  Warning: Extrapolation - input time is outside data range (");
+        convert_to_hhmm(x[0]);
+        printf(" to ");
+        convert_to_hhmm(x[count-1]);
+        printf(")\n");
     }
 
-    // Calculate predicted CO2 with multiple methods for comparison
-    float predicted_linear = linear_interpolation(x, y, n, xp);
-    float predicted_lagrange = lagrange_interpolation(x, y, n, xp, 4);  // Use at most 4 points
+    float predicted = lagrange_interpolation(x, y, count, xp, 4);
+    float actual = find_nearest_actual(x, y, count, xp);
 
-    // Print prediction results
-    printf("\n=========== Results ===========\n");
-    printf("Timestamp: %.2f seconds\n", xp);
-    printf("Linear interpolation: %.2f ppm\n", predicted_linear);
-    printf("Lagrange interpolation: %.2f ppm\n", predicted_lagrange);
-    printf("Recommended value: %.2f ppm\n", predicted_linear);  // Linear is more stable
+    float error_percent = fabs((predicted - actual) / actual) * 100;
+
+    printf("\n========== RESULT ==========\n");
+    printf("Predicted CO2 at %02d:%02d: %.2f ppm\n", hours, minutes, predicted);
+    printf("Nearest actual CO2: %.2f ppm\n", actual);
+    printf("Absolute Error: %.2f ppm\n", fabs(predicted - actual));
+    printf("Relative Error: %.2f%%\n", error_percent);
+
+    // Free memory
+    free(x);
+    free(y);
 
     return 0;
 }
